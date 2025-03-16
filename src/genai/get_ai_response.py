@@ -36,7 +36,7 @@ cat_data = {
     "birth_year": 2007,
     "sex": "male",
     "species": "cat",
-    "breed": "feline domestic shorthair",
+    "breed": "英文: feline domestic shorthair / 中文：米克斯",
     "medical_history": [
         "Feline Hypertrophic Cardiomyopathy Phase IIb, examined on 2024 June",
         "Hyperthyroidism, but the unilateral total thyroid gland has been removed at end of 2023",
@@ -62,6 +62,8 @@ def create_cat_health_chain(llm, specific):
                     cat {cat_data["name"]}, if no, answer as a general cat health expert without
                     mentioning specific cats.
                 - For questions about {cat_data["name"]}, use his specific information to answer
+                - If you don't have some information about {cat_data["name"]},
+                    you can directly answer you don't have the information
                 - Answer the questions in 繁體中文
                 - If a question is not cat-related, respond: "這與貓咪照護無關，我無法回答"
             Current year is {current_y}
