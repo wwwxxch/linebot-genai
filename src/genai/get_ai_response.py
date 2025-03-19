@@ -1,14 +1,11 @@
 import logging
 
 from datetime import datetime
-from typing import Sequence
-from typing_extensions import Annotated, TypedDict
 
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
+from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.checkpoint.mongodb import MongoDBSaver
 
 from src.genai.llm_config import llm_provider_factory
@@ -19,10 +16,10 @@ from src.db.cat_data import cat_data
 llm = llm_provider_factory()
 
 
-class ChatState(TypedDict):
-    messages: Annotated[Sequence[BaseMessage], add_messages]
+class ChatState(MessagesState):
     user_id: str
     is_specific: bool
+    summary: str
 
 
 # Get system prompt
@@ -73,8 +70,15 @@ def check_specific(state: ChatState):
 
 
 def call_model(state: ChatState):
-    messages = state["messages"]
+    # print("In call_model: len of msg: ", len(state["messages"]))
     is_specific = state["is_specific"]
+    summary = state.get("summary", "")
+
+    if summary:
+        summary_message = f"Summary of conversation earlier: {summary}"
+        messages = [SystemMessage(content=summary_message)] + state["messages"]
+    else:
+        messages = state["messages"]
 
     system_prompt = create_system_prompt(is_specific)
 
@@ -86,16 +90,55 @@ def call_model(state: ChatState):
     return {"messages": [response], "is_specific": is_specific}
 
 
+def summarize_conversation(state: ChatState):
+    is_specific = state["is_specific"]
+    summary = state.get("summary", "")
+    if summary:
+        # print(f"xxxx - {summary}")
+        summary_message = (
+            f"This is summary of the converation to date: {summary} \n"
+            "Extend the summary by taking into account the new messages above"
+            "and ignore the content that is not realted to cat or cat care:"
+        )
+    else:
+        summary_message = (
+            "Create a summary of the conversation above,"
+            "ignoring the content that is not related to cat or cat health care"
+        )
+
+    messages = state["messages"] + [HumanMessage(content=summary_message)]
+
+    summary_res = llm.invoke(messages)
+    delete_messages = [RemoveMessage(id=m.id) for m in state["messages"][:-2]]
+    # print("In summarize_conversation: len of msg: ", len(state["messages"]))
+    return {"summary": summary_res.content, "messages": delete_messages, "is_specific": is_specific}
+
+
+def should_continue(state: ChatState):
+    """Return the next node to execute."""
+
+    messages = state["messages"]
+
+    # If there are more than six messages, then we summarize the conversation
+    if len(messages) > 6:
+        return "summarize_conversation"
+
+    # Otherwise we can just end
+    return END
+
+
 def create_chat_graph():
     # Create LangGraph
     workflow = StateGraph(ChatState)
 
     workflow.add_node("check_specific", check_specific)
     workflow.add_node("model", call_model)
+    workflow.add_node(summarize_conversation)
 
     workflow.add_edge(START, "check_specific")
     workflow.add_edge("check_specific", "model")
-    workflow.add_edge("model", END)
+    workflow.add_conditional_edges("model", should_continue)
+    workflow.add_edge("summarize_conversation", END)
 
     # Compile the graph with MongoDB checkpointer
     mongodb_client = MongoDBClient.get_instance()

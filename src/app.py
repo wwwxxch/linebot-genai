@@ -79,6 +79,23 @@ def handle_message(event):
             )
 
 
+# For local testing
+# @app.route("/chat", methods=["POST"])
+# def chat():
+#     try:
+#         body = request.get_json()
+#         app.logger.info(f"Request body: {body}")
+
+#         user_input = body["user_input"]
+#         user_id = body["user_id"]
+
+#         result = get_ai_response(user_input, user_id)
+#     except Exception as e:
+#         return handle_error(500, e, "Unknown error occurred.")
+
+#     return result
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 3000))
     app.run(host="0.0.0.0", port=port)
