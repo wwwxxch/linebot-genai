@@ -45,6 +45,10 @@ def webhook():
     body = request.get_data(as_text=True)
     # app.logger.info(f"Request body: {body}")
 
+    x_forwarded = request.environ.get("HTTP_X_FORWARDED_FOR", "")
+    ip_addr = request.environ.get("remote_addr", "")
+    app.logger.info(f"HTTP_X_FORWARDED_FOR: {x_forwarded} / remote_addr: {ip_addr}")
+
     try:
         lineHandler.handle(body, signature)
     except InvalidSignatureError as e:

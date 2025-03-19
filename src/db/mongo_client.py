@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
 from pymongo import MongoClient
+import logging
 
 
 class MongoDBClient:
@@ -13,7 +14,11 @@ class MongoDBClient:
             mongodb_uri = os.getenv("MONGODB_URI")
             if not mongodb_uri:
                 raise ValueError("Error: MONGODB_URI not found in environment variables. Please set it.")
-            cls._instance = MongoClient(mongodb_uri)
+            try:
+                cls._instance = MongoClient(mongodb_uri)
+            except Exception as e:
+                logging.error(f"Failed to connect to MongoDB: {e}")
+                cls._instance = None
         return cls._instance
 
     @classmethod
