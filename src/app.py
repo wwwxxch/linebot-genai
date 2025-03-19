@@ -45,6 +45,10 @@ def webhook():
     body = request.get_data(as_text=True)
     # app.logger.info(f"Request body: {body}")
 
+    x_forwarded = request.environ.get("HTTP_X_FORWARDED_FOR", "")
+    ip_addr = request.environ.get("remote_addr", "")
+    app.logger.info(f"HTTP_X_FORWARDED_FOR: {x_forwarded} / remote_addr: {ip_addr}")
+
     try:
         lineHandler.handle(body, signature)
     except InvalidSignatureError as e:
@@ -61,7 +65,7 @@ def webhook():
 def handle_message(event):
     # app.logger.info(f"event: {event}")
     sourceType = event.source.type
-    # userId = event.source.user_id
+    userId = event.source.user_id
 
     # Get mention flag
     mentionees = event.message.mention.mentionees if event.message.mention else []
@@ -69,7 +73,7 @@ def handle_message(event):
     if sourceType == "user" or (sourceType == "group" and mention):
         app.logger.info(f"event: {event}")
         # responseMessage = f"你說的是：[ {event.message.text} ]"
-        responseMessage = get_ai_response(event.message.text)
+        responseMessage = get_ai_response(event.message.text, userId)
         with ApiClient(lineConfiguration) as api_client:
             line_bot_api = MessagingApi(api_client)
             line_bot_api.reply_message_with_http_info(
@@ -77,6 +81,23 @@ def handle_message(event):
                     reply_token=event.reply_token, messages=[TextMessage(text=responseMessage)]
                 )
             )
+
+
+# For local testing
+# @app.route("/chat", methods=["POST"])
+# def chat():
+#     try:
+#         body = request.get_json()
+#         app.logger.info(f"Request body: {body}")
+
+#         user_input = body["user_input"]
+#         user_id = body["user_id"]
+
+#         result = get_ai_response(user_input, user_id)
+#     except Exception as e:
+#         return handle_error(500, e, "Unknown error occurred.")
+
+#     return result
 
 
 if __name__ == "__main__":

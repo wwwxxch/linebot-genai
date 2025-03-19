@@ -1,50 +1,29 @@
-import os
-from dotenv import load_dotenv
 import logging
-from enum import Enum
+
 from datetime import datetime
 
-from langchain_openai import ChatOpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import HumanMessage, RemoveMessage, SystemMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-from langchain_core.prompts import ChatPromptTemplate
+from langgraph.graph import StateGraph, START, END, MessagesState
+from langgraph.checkpoint.mongodb import MongoDBSaver
 
-load_dotenv()
-
-
-# LLM configuration
-class LLMProvider(Enum):
-    OPENAI = "openai"
-    GEMINI = "gemini"
+from src.genai.llm_config import llm_provider_factory
+from src.db.mongo_client import MongoDBClient
+from src.db.cat_data import cat_data
 
 
-def llm_provider_factory():
-    try:
-        llm_provider = os.getenv("LLM_PROVIDER", LLMProvider.GEMINI.value)
-
-        if llm_provider == LLMProvider.OPENAI.value:
-            return ChatOpenAI(model="gpt-4o-mini")
-        elif llm_provider == LLMProvider.GEMINI.value:
-            return ChatGoogleGenerativeAI(model="gemini-2.0-flash")
-    except Exception as e:
-        logging.error(f"Error creating LLM provider: {e}")
-        raise e
+llm = llm_provider_factory()
 
 
-cat_data = {
-    "name": "花花",
-    "birth_year": 2007,
-    "sex": "male",
-    "species": "cat",
-    "breed": "英文: feline domestic shorthair / 中文：米克斯",
-    "medical_history": [
-        "Feline Hypertrophic Cardiomyopathy Phase IIb, examined on 2024 June",
-        "Hyperthyroidism, but the unilateral total thyroid gland has been removed at end of 2023",
-    ],
-}
+class ChatState(MessagesState):
+    user_id: str
+    is_specific: bool
+    summary: str
 
 
-def create_cat_health_chain(llm, specific):
+# Get system prompt
+def create_system_prompt(specific):
     current_dt = datetime.now()
     current_y = current_dt.year
 
@@ -77,24 +56,109 @@ def create_cat_health_chain(llm, specific):
                 - If a question is not cat-related, respond: "這與貓咪照護無關，我無法回答"
         """
 
-    # Create prompt template
-    prompt = ChatPromptTemplate.from_messages([("system", system_prompt), ("user", "{input}")])
-
-    chain = prompt | llm
-
-    return chain
+    return system_prompt
 
 
-def get_ai_response(user_input):
+def check_specific(state: ChatState):
+    messages = state["messages"]
+    current_message = messages[-1]
+
+    is_specific = "花花" in current_message.content
+    state["is_specific"] = is_specific
+
+    return state
+
+
+def call_model(state: ChatState):
+    # print("In call_model: len of msg: ", len(state["messages"]))
+    is_specific = state["is_specific"]
+    summary = state.get("summary", "")
+
+    if summary:
+        summary_message = f"Summary of conversation earlier: {summary}"
+        messages = [SystemMessage(content=summary_message)] + state["messages"]
+    else:
+        messages = state["messages"]
+
+    system_prompt = create_system_prompt(is_specific)
+
+    prompt = ChatPromptTemplate.from_messages(
+        [("system", system_prompt), MessagesPlaceholder(variable_name="messages")]
+    )
+    runnable = prompt | llm
+    response = runnable.invoke({"messages": messages})
+    return {"messages": [response], "is_specific": is_specific}
+
+
+def summarize_conversation(state: ChatState):
+    is_specific = state["is_specific"]
+    summary = state.get("summary", "")
+    if summary:
+        # print(f"xxxx - {summary}")
+        summary_message = (
+            f"This is summary of the converation to date: {summary} \n"
+            "Extend the summary by taking into account the new messages above"
+            "and ignore the content that is not realted to cat or cat care:"
+        )
+    else:
+        summary_message = (
+            "Create a summary of the conversation above,"
+            "ignoring the content that is not related to cat or cat health care"
+        )
+
+    messages = state["messages"] + [HumanMessage(content=summary_message)]
+
+    summary_res = llm.invoke(messages)
+    delete_messages = [RemoveMessage(id=m.id) for m in state["messages"][:-2]]
+    # print("In summarize_conversation: len of msg: ", len(state["messages"]))
+    return {"summary": summary_res.content, "messages": delete_messages, "is_specific": is_specific}
+
+
+def should_continue(state: ChatState):
+    """Return the next node to execute."""
+
+    messages = state["messages"]
+
+    # If there are more than six messages, then we summarize the conversation
+    if len(messages) > 6:
+        return "summarize_conversation"
+
+    # Otherwise we can just end
+    return END
+
+
+def create_chat_graph():
+    # Create LangGraph
+    workflow = StateGraph(ChatState)
+
+    workflow.add_node("check_specific", check_specific)
+    workflow.add_node("model", call_model)
+    workflow.add_node(summarize_conversation)
+
+    workflow.add_edge(START, "check_specific")
+    workflow.add_edge("check_specific", "model")
+    workflow.add_conditional_edges("model", should_continue)
+    workflow.add_edge("summarize_conversation", END)
+
+    # Compile the graph with MongoDB checkpointer
+    mongodb_client = MongoDBClient.get_instance()
+    checkpointer = MongoDBSaver(mongodb_client)
+
+    return workflow.compile(checkpointer=checkpointer)
+
+
+def get_ai_response(user_input, user_id):
     try:
-        llm = llm_provider_factory()
 
-        if "花花" in user_input:
-            cat_health_chain = create_cat_health_chain(llm, specific=True)
-        else:
-            cat_health_chain = create_cat_health_chain(llm, specific=False)
-
-        response = cat_health_chain.invoke({"input": user_input})
+        config = {"configurable": {"thread_id": user_id}}
+        input_dict = {
+            "messages": [HumanMessage(content=user_input)],
+            "user_id": user_id,
+            "is_specific": False,
+        }
+        chat_graph = create_chat_graph()
+        output = chat_graph.invoke(input_dict, config)
+        response = output["messages"][-1]
 
     except Exception as e:
         logging.error(f"Error processing query: {e}")
