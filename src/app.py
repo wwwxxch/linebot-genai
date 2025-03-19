@@ -33,6 +33,10 @@ if not app.logger.handlers:
 # ==================================================================
 @app.route("/healthz", methods=["GET"])
 def healthz():
+    x_forwarded = request.environ.get("HTTP_X_FORWARDED_FOR", "")
+    ip_addr = request.environ.get("remote_addr", "")
+    app.logger.info(f"HTTP_X_FORWARDED_FOR: {x_forwarded} / remote_addr: {ip_addr}")
+
     return "OK"
 
 
