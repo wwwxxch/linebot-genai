@@ -78,7 +78,7 @@ def create_cat_health_chain(llm, specific):
         """
 
     # Create prompt template
-    prompt = ChatPromptTemplate.from_messages([("system", system_prompt), ("human", "{input}")])
+    prompt = ChatPromptTemplate.from_messages([("system", system_prompt), ("user", "{input}")])
 
     chain = prompt | llm
 
