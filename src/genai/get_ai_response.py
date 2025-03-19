@@ -1,50 +1,32 @@
-import os
-from dotenv import load_dotenv
 import logging
-from enum import Enum
+
 from datetime import datetime
+from typing import Sequence
+from typing_extensions import Annotated, TypedDict
 
-from langchain_openai import ChatOpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-from langchain_core.prompts import ChatPromptTemplate
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.mongodb import MongoDBSaver
 
-load_dotenv()
-
-
-# LLM configuration
-class LLMProvider(Enum):
-    OPENAI = "openai"
-    GEMINI = "gemini"
-
-
-def llm_provider_factory():
-    try:
-        llm_provider = os.getenv("LLM_PROVIDER", LLMProvider.GEMINI.value)
-
-        if llm_provider == LLMProvider.OPENAI.value:
-            return ChatOpenAI(model="gpt-4o-mini")
-        elif llm_provider == LLMProvider.GEMINI.value:
-            return ChatGoogleGenerativeAI(model="gemini-2.0-flash")
-    except Exception as e:
-        logging.error(f"Error creating LLM provider: {e}")
-        raise e
+from src.genai.llm_config import llm_provider_factory
+from src.db.mongo_client import MongoDBClient
+from src.db.cat_data import cat_data
 
 
-cat_data = {
-    "name": "花花",
-    "birth_year": 2007,
-    "sex": "male",
-    "species": "cat",
-    "breed": "英文: feline domestic shorthair / 中文：米克斯",
-    "medical_history": [
-        "Feline Hypertrophic Cardiomyopathy Phase IIb, examined on 2024 June",
-        "Hyperthyroidism, but the unilateral total thyroid gland has been removed at end of 2023",
-    ],
-}
+llm = llm_provider_factory()
 
 
-def create_cat_health_chain(llm, specific):
+class ChatState(TypedDict):
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+    user_id: str
+    is_specific: bool
+
+
+# Get system prompt
+def create_system_prompt(specific):
     current_dt = datetime.now()
     current_y = current_dt.year
 
@@ -77,24 +59,63 @@ def create_cat_health_chain(llm, specific):
                 - If a question is not cat-related, respond: "這與貓咪照護無關，我無法回答"
         """
 
-    # Create prompt template
-    prompt = ChatPromptTemplate.from_messages([("system", system_prompt), ("user", "{input}")])
-
-    chain = prompt | llm
-
-    return chain
+    return system_prompt
 
 
-def get_ai_response(user_input):
+def check_specific(state: ChatState):
+    messages = state["messages"]
+    current_message = messages[-1]
+
+    is_specific = "花花" in current_message.content
+    state["is_specific"] = is_specific
+
+    return state
+
+
+def call_model(state: ChatState):
+    messages = state["messages"]
+    is_specific = state["is_specific"]
+
+    system_prompt = create_system_prompt(is_specific)
+
+    prompt = ChatPromptTemplate.from_messages(
+        [("system", system_prompt), MessagesPlaceholder(variable_name="messages")]
+    )
+    runnable = prompt | llm
+    response = runnable.invoke({"messages": messages})
+    return {"messages": [response], "is_specific": is_specific}
+
+
+def create_chat_graph():
+    # Create LangGraph
+    workflow = StateGraph(ChatState)
+
+    workflow.add_node("check_specific", check_specific)
+    workflow.add_node("model", call_model)
+
+    workflow.add_edge(START, "check_specific")
+    workflow.add_edge("check_specific", "model")
+    workflow.add_edge("model", END)
+
+    # Compile the graph with MongoDB checkpointer
+    mongodb_client = MongoDBClient.get_instance()
+    checkpointer = MongoDBSaver(mongodb_client)
+
+    return workflow.compile(checkpointer=checkpointer)
+
+
+def get_ai_response(user_input, user_id):
     try:
-        llm = llm_provider_factory()
 
-        if "花花" in user_input:
-            cat_health_chain = create_cat_health_chain(llm, specific=True)
-        else:
-            cat_health_chain = create_cat_health_chain(llm, specific=False)
-
-        response = cat_health_chain.invoke({"input": user_input})
+        config = {"configurable": {"thread_id": user_id}}
+        input_dict = {
+            "messages": [HumanMessage(content=user_input)],
+            "user_id": user_id,
+            "is_specific": False,
+        }
+        chat_graph = create_chat_graph()
+        output = chat_graph.invoke(input_dict, config)
+        response = output["messages"][-1]
 
     except Exception as e:
         logging.error(f"Error processing query: {e}")

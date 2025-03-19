@@ -61,7 +61,7 @@ def webhook():
 def handle_message(event):
     # app.logger.info(f"event: {event}")
     sourceType = event.source.type
-    # userId = event.source.user_id
+    userId = event.source.user_id
 
     # Get mention flag
     mentionees = event.message.mention.mentionees if event.message.mention else []
@@ -69,7 +69,7 @@ def handle_message(event):
     if sourceType == "user" or (sourceType == "group" and mention):
         app.logger.info(f"event: {event}")
         # responseMessage = f"你說的是：[ {event.message.text} ]"
-        responseMessage = get_ai_response(event.message.text)
+        responseMessage = get_ai_response(event.message.text, userId)
         with ApiClient(lineConfiguration) as api_client:
             line_bot_api = MessagingApi(api_client)
             line_bot_api.reply_message_with_http_info(
