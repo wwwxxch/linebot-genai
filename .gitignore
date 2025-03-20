@@ -4,4 +4,7 @@ venv
 __pycache__
 .env
 
+.pytest_cache
+.pytest_html
+
 _development
