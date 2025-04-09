@@ -4,8 +4,8 @@ A Linebot leveraging Generative AI models to answer cat-related health questions
 
 ## Demo
 
-linebot id: @742dvcoi \
-**This project is deployed on Render.com on a free plan. If no incoming request is received, the service will be shut down until a new request comes in. Consequently, there is a high probability that you may not receive a response to your message on the first attempt, and you might need to try again 6-7 minutes after your first message.**
+~~linebot id: @742dvcoi~~ \
+~~This project is deployed on Render.com on a free plan. If no incoming request is received, the service will be shut down until a new request comes in. Consequently, there is a high probability that you may not receive a response to your message on the first attempt, and you might need to try again 6-7 minutes after your first message.~~
 
 Users can asking linebot questions. 
 - If the question is not related to cat, linebot will responed to the user "It's not related to cat health care. I cannot answer.". 
